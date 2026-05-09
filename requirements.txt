@@ -1,0 +1,40 @@
+# Core scientific computing
+numpy>=1.26,<3.0
+pandas>=2.2,<3.0
+scipy>=1.12,<2.0
+
+# Machine learning
+scikit-learn>=1.4,<2.0
+joblib>=1.3,<2.0
+
+# Deep learning
+torch>=2.2,<3.0
+torchvision>=0.17,<1.0
+
+# Federated learning
+flwr>=1.8,<2.0
+
+# Visualization
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+tabulate>=0.9,<1.0
+
+# Notebook / experimentation
+jupyter>=1.0,<2.0
+ipykernel>=6.29,<7.0
+notebook>=7.0,<8.0
+
+# Utilities
+tqdm>=4.66,<5.0
+pyyaml>=6.0,<7.0
+
+# Model export / deployment prep
+onnx>=1.16,<2.0
+onnxruntime>=1.17,<2.0
+
+# Optional API/backend for inference demo
+fastapi>=0.110,<1.0
+uvicorn>=0.29,<1.0
+
+# Testing / code quality
+pytest>=8.0,<9.0
