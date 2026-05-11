@@ -5,7 +5,7 @@ import traceback
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 
 from src.inference.predict import WearableInferenceEngine
 from src.inference.feature_builder import (
@@ -102,8 +102,7 @@ class PredictFeaturesRequest(BaseModel):
     act_brisk: int = Field(ge=0, le=1)
     act_run: int = Field(ge=0, le=1)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
     def validate_onehot(self):
@@ -129,8 +128,7 @@ class PredictFromSensorRequest(BaseModel):
 
     hour_of_day: Optional[float] = Field(default=None, ge=0.0, lt=24.0)
     timestamp_seconds: Optional[float] = Field(default=None, ge=0.0)
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
     @model_validator(mode="after")
     def validate_request(self):
         activity_sources = [
