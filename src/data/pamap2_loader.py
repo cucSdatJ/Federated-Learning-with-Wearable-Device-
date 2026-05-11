@@ -41,10 +41,6 @@ def load_subject(file_path: str, subject_id: int) -> pd.DataFrame:
 
     df["acc_magnitude"] = acc_magnitude(df["acc_x"], df["acc_y"], df["acc_z"])
 
-    hour = (df["timestamp"] / 3600.0) % 24
-    df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-    df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
-
     onehot = df["activity_name"].apply(activity_onehot).apply(pd.Series)
     df = pd.concat([df, onehot], axis=1)
 
@@ -63,8 +59,6 @@ def load_subject(file_path: str, subject_id: int) -> pd.DataFrame:
         "hr_rolling_mean",
         "hr_rolling_std",
         "acc_magnitude",
-        "hour_sin",
-        "hour_cos",
         "act_rest",
         "act_walk",
         "act_brisk",

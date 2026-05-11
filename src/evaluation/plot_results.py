@@ -2,7 +2,8 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+import json
+import numpy as np
 
 sns.set_theme(style="whitegrid", font_scale=1.0)
 
@@ -123,50 +124,6 @@ def plot_compare_all():
     print(f"[DONE] Saved {out}")
 
 
-def plot_fl_round_metrics_manual():
-    """
-    Plot FL round metrics của FedAvg thủ công cũ
-    """
-    path = EXP_DIR / "fl_round_metrics.csv"
-    if not path.exists():
-        print(f"[INFO] Manual FL metrics not found: {path}")
-        return
-
-    df = pd.read_csv(path)
-    if df.empty:
-        print(f"[WARN] Empty file: {path}")
-        return
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    sns.lineplot(data=df, x="round", y="test_f1_macro", marker="o", ax=axes[0], color="tab:blue")
-    axes[0].set_title("Manual FedAvg: Test F1 Macro by Round")
-    axes[0].set_xlabel("Round")
-    axes[0].set_ylabel("F1 Macro")
-
-    sns.lineplot(data=df, x="round", y="test_accuracy", marker="o", ax=axes[1], color="tab:green")
-    axes[1].set_title("Manual FedAvg: Test Accuracy by Round")
-    axes[1].set_xlabel("Round")
-    axes[1].set_ylabel("Accuracy")
-
-    plt.tight_layout()
-    out = PLOT_DIR / "manual_fl_round_metrics.png"
-    plt.savefig(out, dpi=300)
-    plt.close()
-    print(f"[DONE] Saved {out}")
-
-    plt.figure(figsize=(8, 5))
-    sns.lineplot(data=df, x="round", y="avg_local_loss", marker="o", color="tab:red")
-    plt.title("Manual FedAvg: Average Local Loss by Round")
-    plt.xlabel("Round")
-    plt.ylabel("Avg Local Loss")
-    plt.tight_layout()
-    out = PLOT_DIR / "manual_fl_round_loss.png"
-    plt.savefig(out, dpi=300)
-    plt.close()
-    print(f"[DONE] Saved {out}")
-
-
 def plot_fl_round_metrics_flower():
     """
     Plot Flower round metrics
@@ -206,55 +163,6 @@ def plot_fl_round_metrics_flower():
     plt.ylabel("Test Loss")
     plt.tight_layout()
     out = PLOT_DIR / "flower_round_loss.png"
-    plt.savefig(out, dpi=300)
-    plt.close()
-    print(f"[DONE] Saved {out}")
-
-
-def plot_flower_vs_manual():
-    """
-    So sánh Flower vs Manual FedAvg nếu cả hai file đều tồn tại
-    """
-    path_manual = EXP_DIR / "fl_round_metrics.csv"
-    path_flower = EXP_DIR / "flower_round_metrics.csv"
-
-    if not path_manual.exists() or not path_flower.exists():
-        print("[INFO] Need both manual and Flower FL metric files to plot comparison.")
-        return
-
-    df_manual = pd.read_csv(path_manual).copy()
-    df_flower = pd.read_csv(path_flower).copy()
-
-    if df_manual.empty or df_flower.empty:
-        print("[WARN] One of FL metric files is empty.")
-        return
-
-    df_manual["method"] = "manual_fedavg"
-    df_flower["method"] = "flower"
-
-    merged = pd.concat([
-        df_manual[["round", "test_f1_macro", "test_accuracy", "method"]],
-        df_flower[["round", "test_f1_macro", "test_accuracy", "method"]],
-    ], ignore_index=True)
-
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=merged, x="round", y="test_f1_macro", hue="method", marker="o")
-    plt.title("Manual FedAvg vs Flower: Test F1 Macro by Round")
-    plt.xlabel("Round")
-    plt.ylabel("F1 Macro")
-    plt.tight_layout()
-    out = PLOT_DIR / "manual_vs_flower_f1.png"
-    plt.savefig(out, dpi=300)
-    plt.close()
-    print(f"[DONE] Saved {out}")
-
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=merged, x="round", y="test_accuracy", hue="method", marker="o")
-    plt.title("Manual FedAvg vs Flower: Test Accuracy by Round")
-    plt.xlabel("Round")
-    plt.ylabel("Accuracy")
-    plt.tight_layout()
-    out = PLOT_DIR / "manual_vs_flower_accuracy.png"
     plt.savefig(out, dpi=300)
     plt.close()
     print(f"[DONE] Saved {out}")
@@ -339,6 +247,150 @@ def plot_activity_hr_means():
     plt.close()
     print(f"[DONE] Saved {out}")
 
+def plot_local_clients():
+    path = EXP_DIR / "local_results.csv"
+    if not path.exists():
+        print(f"[WARN] Missing file: {path}")
+        return
+
+    df = pd.read_csv(path)
+    if df.empty:
+        print(f"[WARN] Empty file: {path}")
+        return
+
+    df["client_name"] = df["client_id"].apply(lambda x: f"client_{int(x)}")
+
+    # F1 macro
+    plt.figure(figsize=(10, 6))
+    ax = sns.barplot(
+        data=df.sort_values("test_f1_macro", ascending=False),
+        x="client_name",
+        y="test_f1_macro",
+        hue="client_name",
+        palette="Set2",
+        legend=False,
+    )
+    ax.set_title("Local Model Performance by Client (F1 Macro)")
+    ax.set_xlabel("Client")
+    ax.set_ylabel("F1 Macro")
+
+    for i, v in enumerate(df.sort_values("test_f1_macro", ascending=False)["test_f1_macro"]):
+        ax.text(i, v + 0.002, f"{v:.4f}", ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    out = PLOT_DIR / "local_clients_f1_macro.png"
+    plt.savefig(out, dpi=300)
+    plt.close()
+    print(f"[DONE] Saved {out}")
+
+    # Accuracy
+    plt.figure(figsize=(10, 6))
+    ax = sns.barplot(
+        data=df.sort_values("test_accuracy", ascending=False),
+        x="client_name",
+        y="test_accuracy",
+        hue="client_name",
+        palette="Set3",
+        legend=False,
+    )
+    ax.set_title("Local Model Performance by Client (Accuracy)")
+    ax.set_xlabel("Client")
+    ax.set_ylabel("Accuracy")
+
+    for i, v in enumerate(df.sort_values("test_accuracy", ascending=False)["test_accuracy"]):
+        ax.text(i, v + 0.002, f"{v:.4f}", ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    out = PLOT_DIR / "local_clients_accuracy.png"
+    plt.savefig(out, dpi=300)
+    plt.close()
+    print(f"[DONE] Saved {out}")
+
+import json
+import numpy as np
+
+def plot_confusion_matrix_from_json(json_path: Path, out_name: str, title: str):
+    if not json_path.exists():
+        print(f"[WARN] Missing file: {json_path}")
+        return
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        metrics = json.load(f)
+
+    cm = metrics.get("confusion_matrix")
+    if cm is None:
+        print(f"[WARN] confusion_matrix not found in {json_path}")
+        return
+
+    cm = np.array(cm)
+
+    plt.figure(figsize=(6, 5))
+    ax = sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=["OK", "MEDIUM", "HIGH"],
+        yticklabels=["OK", "MEDIUM", "HIGH"],
+    )
+    ax.set_title(title)
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+
+    plt.tight_layout()
+    out = PLOT_DIR / out_name
+    plt.savefig(out, dpi=300)
+    plt.close()
+    print(f"[DONE] Saved {out}")
+
+
+def plot_confusion_matrices():
+    plot_confusion_matrix_from_json(
+        EXP_DIR / "centralized_metrics.json",
+        "confusion_matrix_centralized.png",
+        "Centralized Confusion Matrix",
+    )
+
+    plot_confusion_matrix_from_json(
+        EXP_DIR / "flower_best_metrics.json",
+        "confusion_matrix_flower.png",
+        "Flower FL Confusion Matrix",
+    )
+
+def plot_flower_vs_centralized():
+    path = EXP_DIR / "compare_results.csv"
+    if not path.exists():
+        print(f"[WARN] Missing file: {path}")
+        return
+
+    df = pd.read_csv(path)
+    df = df[df["setting"].isin(["centralized", "flower_best"])].copy()
+
+    if df.empty:
+        print("[WARN] No centralized/flower_best rows found.")
+        return
+
+    plt.figure(figsize=(8, 5))
+    ax = sns.barplot(
+        data=df,
+        x="setting",
+        y="f1_macro",
+        hue="setting",
+        palette=["#4C72B0", "#55A868"],
+        legend=False,
+    )
+    ax.set_title("Flower FL vs Centralized (F1 Macro)")
+    ax.set_xlabel("Setting")
+    ax.set_ylabel("F1 Macro")
+
+    for i, v in enumerate(df["f1_macro"]):
+        ax.text(i, v + 0.001, f"{v:.4f}", ha="center", va="bottom")
+
+    plt.tight_layout()
+    out = PLOT_DIR / "flower_vs_centralized_f1.png"
+    plt.savefig(out, dpi=300)
+    plt.close()
+    print(f"[DONE] Saved {out}")
 
 def main():
     ensure_plot_dir()
@@ -346,11 +398,14 @@ def main():
     # Compare plots
     plot_compare_summary()
     plot_compare_all()
+    plot_flower_vs_centralized()
+    plot_local_clients()
 
     # FL plots
-    plot_fl_round_metrics_manual()
     plot_fl_round_metrics_flower()
-    plot_flower_vs_manual()
+
+    # Confusion matrix
+    plot_confusion_matrices()
 
     # Dataset analysis plots
     plot_activity_counts()

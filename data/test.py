@@ -179,6 +179,23 @@ from pathlib import Path
 # test_df = pd.read_csv("data/processed/test_set.csv")
 # print(test_df["label"].value_counts(normalize=True).sort_index())
 
+import pandas as pd
 
+df_train = pd.read_csv("data/processed/client_1.csv")
+df_test = pd.read_csv("data/processed/test_set.csv")
+
+print("TRAIN hour stats:")
+print(df_train[["hour_sin", "hour_cos"]].describe())
+
+print("\nTEST hour stats:")
+print(df_test[["hour_sin", "hour_cos"]].describe())
+
+print("\nTRAIN min/max:")
+print("hour_sin:", df_train["hour_sin"].min(), df_train["hour_sin"].max())
+print("hour_cos:", df_train["hour_cos"].min(), df_train["hour_cos"].max())
+
+print("\nTEST min/max:")
+print("hour_sin:", df_test["hour_sin"].min(), df_test["hour_sin"].max())
+print("hour_cos:", df_test["hour_cos"].min(), df_test["hour_cos"].max())
 
 

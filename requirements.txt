@@ -30,6 +30,7 @@ pyyaml>=6.0,<7.0
 
 # Model export / deployment prep
 onnx>=1.16,<2.0
+onnxscript
 onnxruntime>=1.17,<2.0
 
 # Optional API/backend for inference demo
@@ -38,3 +39,5 @@ uvicorn>=0.29,<1.0
 
 # Testing / code quality
 pytest>=8.0,<9.0
+
+requests

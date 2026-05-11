@@ -53,11 +53,9 @@ def metrics_row(setting_name: str, metrics: dict):
 def main():
     centralized_path = EXP_DIR / "centralized_metrics.json"
     local_path = EXP_DIR / "local_results.csv"
-    fedavg_path = EXP_DIR / "fl_best_metrics.json"
     flower_path = EXP_DIR / "flower_best_metrics.json"
 
     centralized = load_json(centralized_path)
-    fedavg = load_json(fedavg_path)
     flower = load_json(flower_path)
 
     if not local_path.exists():
@@ -103,9 +101,6 @@ def main():
                 "f1_macro": float(row["test_f1_macro"]),
             })
 
-    # 3) FedAvg thủ công cũ
-    if fedavg is not None:
-        rows.append(metrics_row("federated_best_manual", fedavg))
 
     # 4) Flower
     if flower is not None:

@@ -8,8 +8,6 @@ FEATURE_COLS = [
     "hr_rolling_mean",
     "hr_rolling_std",
     "acc_magnitude",
-    "hour_sin",
-    "hour_cos",
     "act_rest",
     "act_walk",
     "act_brisk",
