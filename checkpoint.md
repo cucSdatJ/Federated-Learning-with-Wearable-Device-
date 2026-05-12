@@ -1,5 +1,5 @@
 # CHECKPOINT — FL Wearable Project
-> Cập nhật tới: 09/05/2026
+> Cập nhật tới: 12/05/2026
 
 ---
 
@@ -7,101 +7,140 @@
 
 | Module | Trạng thái | Tiến độ |
 |---|---|---|
-| ESP32 Firmware | ✅ Hoàn thành | 100% |
+| ESP32 Firmware (cơ bản) | ✅ Hoàn thành | 100% |
+| ESP32 Firmware (Option B integration) | ⚠️ Đang sửa | 70% |
 | PAMAP2 Data Pipeline | ✅ Hoàn thành | 100% |
 | MLP Model (3-class) | ✅ Hoàn thành | 100% |
 | Centralized Training | ✅ Hoàn thành | 100% |
 | Local-only Training | ✅ Hoàn thành | 100% |
 | Federated Learning (Flower) | ✅ Hoàn thành | 100% |
 | Evaluation & Plots | ✅ Hoàn thành | 100% |
-| README.md | ✅ Hoàn thành | 100% |
-| Flutter Mobile App | ❌ Chưa bắt đầu | 0% |
-| Real-time Inference Loop | ⚠️ Cần update | 60% |
-| ESP32 MEDIUM alert (`'M'`) | ⚠️ Cần update | 70% |
-| SQLite Database | ❌ Chưa bắt đầu | 0% |
+| FastAPI Inference Backend | ✅ Hoàn thành | 100% |
+| SQLite Logger | ✅ Hoàn thành | 100% |
+| Real-time Inference Loop (Serial) | ✅ Hoàn thành | 100% |
+| Flutter Mobile App (cấu trúc) | ✅ Hoàn thành | 90% |
+| Flutter ↔ ESP32 Integration (Option B) | ⚠️ Đang implement | 40% |
 | Adafruit IO Dashboard | ❌ Chưa bắt đầu | 0% |
+| README.md | ✅ Hoàn thành | 100% |
 | Báo cáo cuối kỳ | ⚠️ Đang làm | 25% |
 
 ---
 
-## 1. Hardware — ESP32 Firmware ✅
+## Kiến trúc hệ thống đã chốt (Option B)
 
-### Đã hoàn thành
+Kiến trúc end-to-end chính thức, **Flutter App làm trung gian** thay vì Python Serial loop:
+
+```
+ESP32 (Sensors)
+  └── WiFi → MQTT publish → broker.hivemq.com:1883
+                                    │
+                        topic: wearable/data  {"bpm":92,"activity":1}
+                                    │
+                             Flutter App
+                          (SensorProvider)
+                                    │
+                        POST /predict-from-sensor
+                                    │
+                         FastAPI Backend (Laptop)
+                         flower_global_best.pt
+                                    │
+                         response: OK / MEDIUM / HIGH
+                                    │
+                             Flutter App
+                          (PredictionProvider)
+                                    │
+                        topic: wearable/alert  "A"|"M"|"O"
+                                    │
+                             broker.hivemq.com
+                                    │
+                   ESP32 subscribe → mqttCallback → AlertLevel
+                   → TaskAlertManager → LED P2 + Buzzer P27
+```
+
+**Hai MQTT topic cố định:**
+- `wearable/data` — ESP32 publish, Flutter subscribe
+- `wearable/alert` — Flutter publish, ESP32 subscribe
+
+**Broker:** `broker.hivemq.com:1883` (public free, không cần tài khoản)
+**Backup broker:** `test.mosquitto.org:1883`
+
+---
+
+## 1. Hardware — ESP32 Firmware
+
+### 1.1 Đã hoàn thành (trước 09/05)
 - `main.cpp` — khởi tạo FreeRTOS, tạo 4 tasks, init pins
 - `pulse_sensor.cpp` — `TaskReadPulse`: đọc analog pin 32, peak detection, tính BPM, filter 30–200 BPM, moving average
 - `motion_sensor.cpp` — `TaskReadMotion`: đọc MPU6050 qua I2C, tính acc magnitude, classify activity (0=rest, 1=walk, 2=brisk, 4=run)
-- `comm_task.cpp` — `TaskCommunicate`: gửi `BPM,Activity\n` qua Serial 115200, nhận lệnh `'A'`/`'O'`, publish MQTT lên Core IoT
-- `alert_manager.cpp` — `TaskAlertManager`: LED P2 + Buzzer P27 nhấp nháy khi `alertTriggered=true`
-- `config.h` — pin definitions, WiFi SSID/Pass, MQTT server/token
-- `globals.h/.cpp` — shared variables: `currentBPM`, `currentActivity`, `alertTriggered`
+- `alert_manager.cpp` — `TaskAlertManager`: LED P2 + Buzzer P27
+- `config.h` — pin definitions, WiFi, MQTT config
+- `globals.h/.cpp` — shared variables
 
-### Đã test thực tế
+### 1.2 Đã test thực tế (20/04/2026)
 - Kết nối ESP32 qua COM5 thành công
-- Python inference loop đọc được `BPM,Activity` từ Serial
-- Gửi lệnh `'A'` → Buzzer + LED kích hoạt đúng
+- Python Serial loop đọc `BPM,Activity` đúng
+- Lệnh `'A'` → Buzzer + LED kích hoạt đúng
 - MQTT publish lên Core IoT hoạt động
 
-### Cần làm (nhỏ)
-- [ ] Thêm lệnh `'M'` (MEDIUM alert): nhận ở `comm_task.cpp`, LED nhấp nháy chậm ở `alert_manager.cpp`
-- [ ] Thêm `AlertLevel` enum vào `globals.h` (`ALERT_OK`, `ALERT_MED`, `ALERT_HIGH`)
-- [ ] Comment out dòng hardcode test trong `pulse_sensor.cpp`:
-  ```cpp
-  // if (currentBPM > 120) alertTriggered = true; else alertTriggered = false;
-  ```
-  (Python AI mới là bên quyết định alert)
+### 1.3 Cần sửa cho Option B (⚠️ chưa làm)
+
+**`globals.h`** — thêm AlertLevel enum:
+```cpp
+#pragma once
+enum AlertLevel { ALERT_OK, ALERT_MED, ALERT_HIGH };
+extern volatile int currentBPM;
+extern volatile int currentActivity;
+extern volatile bool alertTriggered;
+extern volatile AlertLevel alertLevel;   // MỚI
+```
+
+**`globals.cpp`** — thêm init:
+```cpp
+volatile AlertLevel alertLevel = ALERT_OK;
+```
+
+**`config.h`** — đổi MQTT_SERVER sang HiveMQ:
+```cpp
+#define MQTT_SERVER "broker.hivemq.com"
+#define MQTT_PORT   1883
+// Giữ MQTT_TOKEN cho Core IoT nếu cần publish song song
+```
+
+**`comm_task.cpp`** — toàn bộ rewrite:
+- Bỏ Serial loop (Python không còn làm trung gian)
+- Thêm `mqttCallback()` nhận lệnh `'A'`/`'M'`/`'O'` từ Flutter
+- Subscribe `wearable/alert` sau khi connect
+- Publish `wearable/data` thay vì `v1/devices/me/telemetry`
+- Client ID dùng MAC address để tránh conflict: `"ESP32_" + WiFi.macAddress()`
+
+**`alert_manager.cpp`** — 3 mức dựa trên `alertLevel`:
+```
+ALERT_HIGH → LED + Buzzer nhấp nháy nhanh 200ms
+ALERT_MED  → chỉ LED nhấp nháy chậm 700ms, Buzzer tắt
+ALERT_OK   → tất cả tắt
+```
+
+**`pulse_sensor.cpp`** — bỏ hardcode test:
+```cpp
+// XÓA dòng này:
+// if (currentBPM > 120) alertTriggered = true; else alertTriggered = false;
+```
 
 ---
 
 ## 2. PAMAP2 Data Pipeline ✅
 
-### Đã hoàn thành
+### Đã hoàn thành và chốt
 
-#### 2.1 Khám phá dataset
-- Xác minh 9 file `.dat`: `subject101.dat` → `subject109.dat`
-- Chỉ **13/19** activity IDs thực sự xuất hiện trong dataset này (IDs `9, 10, 11, 18, 19, 20` không có)
-- Đã thống kê activity counts toàn bộ dataset:
-
-| Activity | Count |
-|---|---:|
-| walking (4) | 238,761 |
-| ironing (17) | 238,690 |
-| nordic_walking (7) | 188,107 |
-| cycling (6) | 164,600 |
-| vacuum_cleaning (16) | 175,353 |
-| ascending_stairs (12) | 117,216 |
-| running (5) | 98,199 |
-| descending_stairs (13) | 104,944 |
-| rope_jumping (24) | 49,360 |
-
-- Đã thống kê HR mean/median/std theo activity trên toàn 9 subjects:
-
-| Activity | Mean HR | Nhóm |
-|---|---:|---|
-| lying (1) | 75.54 | rest |
-| sitting (2) | 80.01 | rest |
-| standing (3) | 88.55 | rest |
-| ironing (17) | 90.06 | rest |
-| vacuum_cleaning (16) | 104.20 | walk |
-| walking (4) | 112.79 | walk |
-| nordic_walking (7) | 123.83 | brisk |
-| cycling (6) | 124.88 | brisk |
-| descending_stairs (13) | 129.16 | brisk |
-| ascending_stairs (12) | 129.53 | brisk |
-| running (5) | 156.59 | run |
-| rope_jumping (24) | 161.99 | run |
-
-#### 2.2 Activity mapping (chốt cuối)
-Grouping dựa trên HR thực tế, không phải tên activity:
+#### Activity mapping
 ```python
-rest  = [1, 2, 3, 17]      # HR mean: 75–90
-walk  = [4, 16]             # HR mean: 104–113
-brisk = [6, 7, 12, 13]     # HR mean: 124–130
-run   = [5, 24]             # HR mean: 157–162
+rest  = [1, 2, 3, 17]   # HR mean 75–90 bpm
+walk  = [4, 16]          # HR mean 104–113 bpm
+brisk = [6, 7, 12, 13]  # HR mean 124–130 bpm
+run   = [5, 24]          # HR mean 157–162 bpm
 ```
-> Note: `cycling (6)` → `brisk` (không phải `run`) vì HR mean 124.88 gần stairs/nordic, không gần running 156.
 
-#### 2.3 Pseudo-labeling (chốt cuối)
-Threshold dựa trên HR thực tế mỗi nhóm:
+#### Pseudo-labeling thresholds
 ```
 rest:  MEDIUM ≥ 90,  HIGH ≥ 100
 walk:  MEDIUM ≥ 105, HIGH ≥ 120
@@ -109,31 +148,14 @@ brisk: MEDIUM ≥ 120, HIGH ≥ 135
 run:   MEDIUM ≥ 150, HIGH ≥ 170
 ```
 
-#### 2.4 Feature engineering (10 features, match ESP32)
+#### 8 features (chốt — bỏ hour_sin/hour_cos so với README cũ)
 ```
-heart_rate, hr_rolling_mean, hr_rolling_std,
-acc_magnitude (cột 4,5,6 — hand IMU, KHÔNG phải chest),
-hour_sin, hour_cos,
+heart_rate, hr_rolling_mean, hr_rolling_std, acc_magnitude,
 act_rest, act_walk, act_brisk, act_run
 ```
+> Lưu ý: `src/models/mlp.py` dùng `input_dim=8`, không phải 10. README cũ ghi 10 features nhưng code thực tế là 8 (không có hour_sin/hour_cos).
 
-#### 2.5 Files đã generate
-```
-data/processed/
-├── all_processed.csv
-├── class_distribution.csv
-├── client_1.csv     (subject101 — 248,599 rows)
-├── client_2.csv     (subject102 — 260,902 rows)
-├── client_3.csv     (subject103 — 173,851 rows)
-├── client_4.csv     (subject104 — 229,262 rows)
-├── client_5.csv     (subject105 — 271,021 rows)
-├── test_set.csv     (subject106–109 — 748,113 rows)
-├── activity_counts_all_subjects.csv
-├── activity_hr_stats_all_subjects.csv
-└── activity_hr_stats_per_subject.csv
-```
-
-#### 2.6 Label distribution mỗi client (đã verify — không còn NaN)
+#### Label distribution mỗi client
 | Client | Subject | OK (0) | MEDIUM (1) | HIGH (2) |
 |---|---|---:|---:|---:|
 | client_1 | 101 | 15.1% | 32.4% | 52.5% |
@@ -143,253 +165,280 @@ data/processed/
 | client_5 | 105 | 50.4% | 37.7% | 11.9% |
 | test_set | 106–109 | ~70% | ~14% | ~16% |
 
-Non-IID tự nhiên giữa các subject — đúng tinh thần FL.
-
-#### 2.7 Scripts pipeline
-```bash
-python -m src.data.preprocess      # → all_processed.csv
-python -m src.data.split_clients   # → client_1..5.csv + test_set.csv
-```
+Non-IID tự nhiên — đúng tinh thần FL.
 
 ---
 
 ## 3. Model MLP ✅
 
-### Đã hoàn thành
-- `src/models/mlp.py` — `MLPClassifier`:
-  ```
-  Linear(10, 64) → BatchNorm → ReLU → Dropout(0.3)
-  Linear(64, 32) → BatchNorm → ReLU → Dropout(0.2)
-  Linear(32, 16) → ReLU
-  Linear(16, 3)   ← 3 outputs: OK / MEDIUM / HIGH
-  ```
-- Loss: `CrossEntropyLoss` với balanced class weights per client
-- Optimizer: Adam, lr = 1e-3
+```
+MLPClassifier(input_dim=8, num_classes=3):
+  Linear(8, 32) → ReLU → Dropout(0.2)
+  Linear(32, 16) → ReLU → Dropout(0.1)
+  Linear(16, 3)
+```
+
+> Lưu ý: Architecture trong `mlp.py` thực tế **nhỏ hơn** README mô tả (không có BatchNorm, không có layer 64). README ghi sai — code là nguồn đúng.
 
 ---
 
 ## 4. Centralized Training ✅
 
-### Đã hoàn thành
-- `src/training/train_centralized.py`
-- Gộp client_1..5 → train set, fit StandardScaler, train MLP
-- Evaluate trên `test_set.csv`
+Kết quả mô hình centralized:
 
-### Kết quả
-| Metric | Score |
-|---|---:|
-| Accuracy | 0.9992 |
-| Precision Macro | 0.9989 |
-| Recall Macro | 0.9994 |
-| F1 Macro | 0.9991 |
-
-### Files output
-```
-models/centralized_mlp.pt
-models/scaler.pkl
-experiments/centralized_metrics.json
-experiments/centralized_classification_report.txt
-experiments/centralized_history.csv
-```
-
----
+| Metric             | Score     |
+| ------------------ | --------- |
+| Accuracy           | 0.999536  |
+| Precision Macro    | 0.999243  |
+| Recall Macro       | 0.999535  |
+| F1 Macro           | 0.999389  |
 
 ## 5. Local-only Training ✅
 
-### Đã hoàn thành
-- `src/training/train_local.py`
-- Train riêng từng client (5 models độc lập)
-- Mỗi client có scaler riêng, class weights riêng
+### Kết quả từng client:
 
-### Files output
-```
-models/local_client_1.pt .. local_client_5.pt
-models/scaler_client_1.pkl .. scaler_client_5.pkl
-experiments/local_results.csv
-experiments/client_*_history.csv
-experiments/client_*_val_metrics.json
-experiments/client_*_test_metrics.json
-```
+| Client  | Test Accuracy | Test Precision Macro | Test Recall Macro | Test F1 Macro |
+| ------- | ------------- | -------------------- | ----------------- | ------------- |
+| Client 1 | 0.968070 | 0.956892 | 0.982573 | 0.968070 |
+| Client 2 | 0.999316 | 0.998958 | 0.999194 | 0.999076 |
+| Client 3 | 0.942023 | 0.923024 | 0.933516 | 0.923380 |
+| Client 4 | 0.946702 | 0.973317 | 0.899455 | 0.930684 |
+| Client 5 | 0.978876 | 0.970145 | 0.957219 | 0.961592 |
 
-### Kết quả trung bình (local_avg)
-| Metric | Score |
-|---|---:|
-| Accuracy | 0.9474 |
-| Precision Macro | 0.9326 |
-| Recall Macro | 0.9385 |
-| F1 Macro | 0.9302 |
+--- 
+### Trung bình local (local_avg):
+| Metric          | Score     |
+| --------------- | --------- |
+| Accuracy        | 0.966997  |
+| Precision Macro | 0.964467  |
+| Recall Macro    | 0.954392  |
+| F1 Macro        | 0.956561  |
 
 ---
 
 ## 6. Federated Learning — Flower ✅
 
-### Đã hoàn thành
-
-#### 6.1 Architecture
-- `src/fl/common.py` — shared utils: `load_client_data()`, `df_to_loader()`, `get_model()`, `get_parameters()`, `set_parameters()`, `train_model()`, `evaluate_model()`, `compute_local_class_weights()`
-- `src/fl/client.py` — `WearableFlowerClient(NumPyClient)`: `fit()` + `evaluate()`
-- `src/fl/server.py` — Flower server với `get_evaluate_fn()` evaluate global model trên `test_set.csv` sau mỗi round
-
-#### 6.2 Config
-| Parameter | Value |
-|---|---|
-| Rounds | 15 |
-| Local epochs/round | 1 |
-| Batch size | 512 |
-| Learning rate | 1e-3 |
-| Aggregation | FedAvg (weighted by samples) |
-| Class weights | Balanced per client |
-
-#### 6.3 FL convergence (Flower)
-| Round | Avg Local Loss | Accuracy | F1 Macro |
-|---:|---:|---:|---:|
-| 0 (init) | — | 0.1630 | 0.0944 |
-| 1 | 1.1525 | 0.8841 | 0.8451 |
-| 5 | 0.0541 | 0.9901 | 0.9857 |
-| 10 | 0.0142 | 0.9970 | 0.9951 |
-| 15 | 0.0056 | 0.9985 | 0.9977 |
-
-#### 6.4 Kết quả best (Flower)
-| Metric | Score |
-|---|---:|
-| Accuracy | 0.9985 |
-| Precision Macro | 0.9972 |
-| Recall Macro | 0.9982 |
-| F1 Macro | 0.9977 |
-
-#### 6.5 Files output
-```
-models/fl_global_best.pt
-models/fl_scaler.pkl
-experiments/fl_round_metrics.csv
-experiments/fl_best_metrics.json
-experiments/fl_best_classification_report.txt
-```
-
-#### 6.6 Cách chạy
-```bash
-# Terminal 1 — Server
-python -m src.fl.server
-
-# Terminal 2–6 — 5 Clients
-python -m src.fl.client --cid 1 --server 127.0.0.1:8080
-python -m src.fl.client --cid 2 --server 127.0.0.1:8080
-python -m src.fl.client --cid 3 --server 127.0.0.1:8080
-python -m src.fl.client --cid 4 --server 127.0.0.1:8080
-python -m src.fl.client --cid 5 --server 127.0.0.1:8080
-```
+#### FL convergence
+| Round | Accuracy  | F1 Macro  |
+| ----- | --------- | --------- |
+| 0     | 0.165447  | 0.113881  |
+| 1     | 0.941050  | 0.924582  |
+| 5     | 0.994401  | 0.992602  |
+| 10    | 0.998841  | 0.998098  |
+| 11    | 0.999651  | 0.999546  |
+| 12    | 0.999659  | 0.999550  |
 
 ---
 
-## 7. Evaluation & Comparison ✅
-
-### So sánh 3 cấu hình chính
-| Setting | Accuracy | Precision Macro | Recall Macro | F1 Macro |
-|---|---:|---:|---:|---:|
-| centralized | 0.9992 | 0.9989 | 0.9994 | **0.9991** |
-| flower_best | 0.9985 | 0.9972 | 0.9982 | **0.9977** |
-| local_avg | 0.9474 | 0.9326 | 0.9385 | **0.9302** |
-
-### Kết luận học thuật
-- Centralized = upper bound (toàn bộ data cùng một chỗ)
-- **Flower FL chênh centralized < 0.002 F1** — gần như tương đương mà không cần share raw data
-- **Flower FL vượt local_avg +0.068 F1** — đây là bằng chứng chính của giá trị FL
-
-### Scripts đã có
-```bash
-python -m src.training.compare_results   # → compare_results.csv, compare_summary.csv
-python -m src.training.plot_results      # → experiments/plots/*.png
-```
-
-### Plots đã generate
-```
-experiments/plots/
-├── compare_summary_f1_macro.png
-├── compare_summary_accuracy.png
-├── compare_all_top10_f1_macro.png
-├── flower_round_metrics.png
-├── flower_round_loss.png
-├── activity_counts.png
-└── activity_hr_means.png
-```
+#### Kết quả best (Flower)
+| Metric             | Score     |
+| ------------------ | --------- |
+| Accuracy           | 0.999659  |
+| Precision Macro    | 0.999473  |
+| Recall Macro       | 0.999626  |
+| F1 Macro           | 0.999550  |
 
 ---
 
-## 8. Documentation ✅
+#### Kết luận học thuật
+- **FL chênh Centralized < 0.0002 F1** — gần như tương đương (không chia sẻ raw data).
+- **FL vượt Local avg +0.043 F1** — chứng minh giá trị của FL trên phân phối dữ liệu Non-IID.
+
+
+---
+
+## 7. Compare Summary
+| setting             | accuracy  | precision_macro | recall_macro | f1_macro  |
+| ------------------- | --------- | --------------- | ------------ | --------- |
+| flower_best         | 0.999659  | 0.999473        | 0.999626     | 0.999550  |
+| centralized         | 0.999536  | 0.999243        | 0.999535     | 0.999389  |
+| local_best_client_2 | 0.999316  | 0.998958        | 0.999194     | 0.999076  |
+| local_client_2      | 0.999316  | 0.998958        | 0.999194     | 0.999076  |
+| local_client_1      | 0.968070  | 0.956892        | 0.982573     | 0.968070  |
+| local_client_5      | 0.978876  | 0.970145        | 0.957219     | 0.961592  |
+| local_avg           | 0.966997  | 0.964467        | 0.954392     | 0.956561  |
+| local_client_4      | 0.946702  | 0.973317        | 0.899455     | 0.930684  |
+| local_client_3      | 0.942023  | 0.923024        | 0.933516     | 0.923380  |
+
+
+Plots đã generate: `experiments/plots/*.png`
+
+---
+
+## 8. FastAPI Inference Backend ✅
 
 ### Đã hoàn thành
-- `README.md` — đầy đủ: dataset, features, activity grouping, labeling strategy, repo structure, setup, pipeline, training, FL, results, notes, future work
+- `src/inference/api_server.py` — FastAPI app đầy đủ
+- `src/inference/predict.py` — `WearableInferenceEngine`
+- `src/inference/feature_builder.py` — build feature từ sensor data
+- `src/inference/utils.py` — FEATURE_COLS, LABEL_MAP
 
----
+### Endpoints
+| Endpoint | Method | Mô tả |
+|---|---|---|
+| `/health` | GET | Kiểm tra server + model |
+| `/labels` | GET | Map 0→OK, 1→MEDIUM, 2→HIGH |
+| `/device-activity-map` | GET | Map device code → activity group |
+| `/predict` | POST | Predict từ 8 features trực tiếp |
+| `/predict-from-sensor` | POST | Predict từ raw sensor data (Flutter dùng cái này) |
 
-## 9. Real-time Inference Loop ⚠️ (cần update)
-
-### Trạng thái hiện tại
-- `inference/realtime_loop.py` đang chạy được với model cũ (binary/threshold)
-- Đã test thực tế 20/4/2026 — kết nối COM5, detect HIGH alert đúng
-
-### Terminal output thực tế (20/4/2026)
-```
-[*] Successfully connected to Wearable Hardware!
-[*] Model successfully loaded from results/global_model.pth
-21:41:23  140.0  rest  99.1%  [HIGH]   ← alert đúng
-21:41:52  121.0  walk  79.9%  [MEDIUM]
-21:42:04   92.0  rest   0.4%  OK
-```
-
-### Cần làm
-- [ ] Update `realtime_loop.py` load model mới (`fl_global_best.pt` hoặc `fl_scaler.pkl`)
-- [ ] Sửa inference: softmax 3-class → `argmax` → gửi `'A'`/`'M'`/`'O'` về ESP32
-- [ ] Sửa feature extraction: đảm bảo 10 features đúng thứ tự, đúng cột acc hand (col 4,5,6)
-- [ ] Test end-to-end lại với model Flower
-
-```python
-# Sau update:
-label, conf = predict(model, features)
-if label == 2:   ser.write(b'A')   # HIGH
-elif label == 1: ser.write(b'M')   # MEDIUM (mới)
-else:            ser.write(b'O')   # OK
-```
-
----
-
-## 10. Flutter Mobile App ❌ (chưa bắt đầu)
-
-### Cần làm toàn bộ
-- [ ] Setup Flutter project: `flutter create fl_wearable_app`
-- [ ] `pubspec.yaml`: thêm `mqtt_client`, `fl_chart`, `flutter_local_notifications`, `provider`, `sqflite`
-- [ ] `HomeScreen` — HR gauge + activity badge + risk badge (OK/MED/HIGH màu xanh/vàng/đỏ)
-- [ ] `AlertScreen` — ListView alerts với timestamp, severity, HR value
-- [ ] `HistoryScreen` — LineChart HR theo thời gian
-- [ ] `SettingsScreen` — MQTT server, notification toggle
-- [ ] `mqtt_service.dart` — kết nối Core IoT, subscribe telemetry
-- [ ] `notification_service.dart` — push notification khi risk == 2
-
-### MQTT data format (từ Core IoT)
+### Request format Flutter gửi lên (`/predict-from-sensor`)
 ```json
-{"bpm": 85, "activity": 1, "risk": 2}
+{
+  "heart_rate": 132.0,
+  "hr_window": [126, 128, 130, 131, 132],
+  "acc_x": 0.8,
+  "acc_y": 9.6,
+  "acc_z": 1.5,
+  "device_activity_code": 2,
+  "timestamp_seconds": 1234567890.0
+}
 ```
+
+### Chạy backend
+```bash
+uvicorn src.inference.api_server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+`--host 0.0.0.0` bắt buộc để điện thoại trong cùng WiFi truy cập được.
+
+### Lưu ý quan trọng
+- Model file: `models/flower_global_best.pt` (không phải `fl_global_best.pt` — server.py lưu tên khác với api_server.py load)
+- Scaler file: `models/flower_scaler.pkl`
+- Cần mở firewall Windows port 8000 nếu dùng điện thoại thật
 
 ---
 
-## 11. SQLite Database ❌ (chưa bắt đầu)
+## 9. SQLite Logger ✅
 
-### Schema cần implement
+### Đã hoàn thành
+- `src/inference/logger.py` — đầy đủ 4 tables + helper functions
+
+### Schema
 ```sql
--- 4 bảng
-CREATE TABLE readings (id, timestamp, client_id, hr_bpm, activity, risk_prob, alert, source);
+CREATE TABLE readings (id, timestamp, client_id, hr_bpm, activity, activity_name,
+                       risk_prob_ok, risk_prob_med, risk_prob_high, alert, source);
 CREATE TABLE alerts   (id, timestamp, client_id, hr_bpm, severity, resolved, resolved_at);
 CREATE TABLE fl_rounds  (round_id, timestamp, n_clients, avg_accuracy, avg_f1_macro);
 CREATE TABLE fl_clients (id, round_id, client_id, local_f1, fl_f1, n_samples);
 ```
 
-### Cần viết
-- [ ] `database/schema.sql`
-- [ ] `gateway/module4_logger.py`:
-  - `init_db()`
-  - `log_reading()`
-  - `log_alert()`
-  - `log_fl_round()`
+### Đã có functions
+- `init_db()` — tạo DB và bảng từ schema.sql
+- `log_reading()` — log mỗi BPM reading + probs + alert
+- `log_alert()` — log khi severity là MEDIUM hoặc HIGH
+- `resolve_alert()` — đánh dấu alert đã xử lý
+- `log_fl_round()` / `log_fl_client()` — log FL metrics
+- `get_recent_readings()`, `get_unresolved_alerts()`, `get_alert_summary()`
+
+### Tích hợp
+Logger hiện được gọi trong `realtime_loop.py`. Với kiến trúc Option B, logger nên được tích hợp vào `api_server.py` hoặc chạy song song — cần quyết định:
+- [ ] Thêm `log_reading()` call vào endpoint `/predict-from-sensor` của `api_server.py`
+
+---
+
+## 10. Real-time Inference Loop (Serial) ✅
+
+### Trạng thái
+`src/inference/realtime_loop.py` đã hoàn chỉnh với model Flower mới:
+- Load `flower_global_best.pt` + `flower_scaler.pkl`
+- 8 features đúng thứ tự FEATURE_COLS
+- Gửi `'A'`/`'M'`/`'O'` về ESP32 qua Serial
+- Log vào SQLite qua `logger.py`
+- Demo mode (không cần ESP32): `python src/inference/realtime_loop.py`
+- Serial mode: `python src/inference/realtime_loop.py --port COM5`
+
+### Lưu ý
+Với kiến trúc **Option B** (Flutter làm trung gian), `realtime_loop.py` **không còn là primary flow** cho demo. Nó vẫn giữ lại như:
+- Fallback khi không có điện thoại
+- Tool để test model độc lập
+- Demo mode cho báo cáo
+
+---
+
+## 11. Flutter Mobile App
+
+### 11.1 Đã hoàn thành (cấu trúc)
+Toàn bộ cấu trúc app đã có:
+
+```
+lib/
+├── app.dart, main.dart
+├── core/         config.dart, constants.dart, theme.dart, utils.dart
+├── models/       app_settings, history_item, predict_response,
+│                 sensor_packet, sensor_request
+├── providers/    app_state, prediction_provider, sensor_provider,
+│                 settings_provider
+├── routes/       app_routes.dart
+├── screens/      about, alert, device, history, home, live_monitor,
+│                 settings, splash
+├── services/     api_service, device_service, history_service,
+│                 mock_sensor_service, mqtt_service, notification_service,
+│                 settings_service
+└── widgets/      alert_banner, history_tile, metric_tile, prediction_card,
+                  probability_bar, sensor_input_form
+```
+
+Screens đã implement: HomeScreen, LiveMonitorScreen, HistoryScreen, SettingsScreen, DeviceScreen, SplashScreen, AboutScreen.
+
+Mock sensor hoạt động: 4 profiles (rest/walk/brisk/run) với noise ngẫu nhiên.
+
+### 11.2 Cần sửa cho Option B (⚠️ phần quan trọng nhất còn lại)
+
+**`lib/services/device_service.dart`** — rewrite hoàn toàn:
+- Implement MQTT connect tới `broker.hivemq.com:1883`
+- Subscribe `wearable/data` → parse JSON → emit `SensorPacket`
+- Method `sendAlertCommand(String cmd)` — publish `wearable/alert`
+- Auto-reconnect khi mất kết nối
+- Client ID unique: `"flutter_app_${timestamp}"`
+
+**`lib/providers/sensor_provider.dart`** — đổi `deviceService` thành `public`:
+```dart
+final DeviceService deviceService = DeviceService(); // public
+```
+
+**`lib/providers/prediction_provider.dart`** — thêm parameter `deviceService`:
+```dart
+Future<void> predictFromPacket({
+  ...
+  DeviceService? deviceService,  // MỚI
+}) async {
+  // sau khi predict:
+  final cmd = result.predClass == 2 ? 'A'
+             : result.predClass == 1 ? 'M' : 'O';
+  await deviceService?.sendAlertCommand(cmd);
+}
+```
+
+**`lib/screens/live_monitor_screen.dart`** — thêm auto predict Timer:
+```dart
+Timer.periodic(Duration(ms: settings.predictIntervalMs), (_) {
+  if (settings.autoPredict && packet != null && !prediction.isLoading) {
+    prediction.predictFromPacket(..., deviceService: sensor.deviceService);
+  }
+});
+```
+
+C��p nhật tất cả calls `predictFromPacket` truyền thêm `deviceService: sensor.deviceService`.
+
+**`lib/core/config.dart`**:
+```dart
+static String defaultBaseUrl = 'http://10.0.2.2:8000'; // emulator
+// Đổi thành IP LAN khi test trên điện thoại thật
+static const int defaultPredictIntervalMs = 2000; // giảm xuống 2s
+```
+
+### 11.3 Dependency cần có trong pubspec.yaml
+```yaml
+mqtt_client: ^10.0.0        # MQTT 2 chiều
+fl_chart: ^0.68.0           # Realtime HR chart
+flutter_local_notifications  # Push notification
+provider: ^6.0.0
+shared_preferences           # Lưu settings + history
+uuid: ^4.0.0                 # HistoryItem ID
+http: ^1.0.0                 # API calls
+intl: ^0.18.0                # Date formatting
+```
 
 ---
 
@@ -397,127 +446,180 @@ CREATE TABLE fl_clients (id, round_id, client_id, local_f1, fl_f1, n_samples);
 
 ### Feeds cần tạo
 - `heart-rate` — HR gauge real-time
-- `activity-level` — activity indicator (rest/walk/brisk/run)
-- `alert-cmd` — alert level (OK/MEDIUM/HIGH)
-- `fl-accuracy` — line chart FL accuracy per round [bonus HTTT]
+- `activity-level` — rest/walk/brisk/run
+- `alert-cmd` — OK/MEDIUM/HIGH
+- `fl-accuracy` — line chart FL accuracy per round
 
 ### Cần làm
-- [ ] `gateway/module1_display.py` — publish lên Adafruit feeds
 - [ ] Tạo Adafruit IO account + feeds + dashboard widgets
+- [ ] Viết `gateway/module1_display.py` — publish lên Adafruit feeds
+
+> Với Option B, ESP32 → MQTT → Flutter → API, Adafruit dashboard có thể bị loại khỏi flow chính. Cân nhắc: có thể publish song song từ ESP32 lên cả `wearable/data` (HiveMQ) lẫn Adafruit MQTT trong cùng `TaskCommunicate`.
 
 ---
 
-## 13. Báo cáo cuối kỳ ⚠️ (đang làm)
+## 13. Báo cáo cuối kỳ ⚠️ (đang làm — 25%)
 
 ### Đã có
-- Results & Discussion section hoàn chỉnh (dựa trên số liệu thật)
-- README đầy đủ để tham chiếu khi viết chương cơ sở lý thuyết và hiện thực
+- Results & Discussion section hoàn chỉnh
+- README đầy đủ để tham chiếu
 
 ### Cần hoàn thiện
 - [ ] Chương 1: Giới thiệu đề tài
 - [ ] Chương 2: Cơ sở lý thuyết (IoT, FL, PAMAP2, MLP, Flutter, MQTT)
-- [ ] Chương 3: Thiết kế hệ thống (kiến trúc 4 tầng, use-case, ER diagram, UI/UX)
-- [ ] Chương 4: Hiện thực (ESP32 firmware, Strategy Pattern threshold, SQLite, FL pipeline)
-- [ ] **Chương 5: Kết quả thực nghiệm** ← đã có data, cần viết thành văn
+- [ ] Chương 3: Thiết kế hệ thống — cập nhật kiến trúc Option B, use-case, ER diagram, UI/UX
+- [ ] Chương 4: Hiện thực (ESP32 firmware, Strategy Pattern, SQLite, FL pipeline)
+- [ ] Chương 5: Kết quả thực nghiệm ← đã có data
 - [ ] Chương 6: Privacy Discussion (FL vs centralized, gradient leakage, GDPR)
 - [ ] Chương 7: Kết luận & Hướng phát triển
 - [ ] Phụ lục: Code snippets, screenshots
 
 ---
 
-## 14. Tóm tắt công việc còn lại (ưu tiên)
+## 14. Tóm tắt công việc còn lại (ưu tiên theo demo)
 
-### Ưu tiên 1 — Phần cứng (CE-1/CE-2) — nhỏ, nhanh
+### Ưu tiên 1 — ESP32 firmware Option B (CE-1/CE-2) — ~2 giờ
 ```
-[ ] Thêm 'M' command vào comm_task.cpp + alert_manager.cpp
-[ ] Test lại end-to-end alert 3 level với ESP32 thật
-```
-
-### Ưu tiên 2 — Inference update (CS-4) — trung bình
-```
-[ ] Update realtime_loop.py: load fl_global_best.pt, softmax 3-class, gửi A/M/O
-[ ] Test với ESP32 thật
-```
-
-### Ưu tiên 3 — Database (CS-1/CE-3) — trung bình
-```
-[ ] Viết schema.sql + module4_logger.py
-[ ] Tích hợp vào inference loop (log mỗi reading)
+[ ] globals.h: thêm AlertLevel enum
+[ ] globals.cpp: init alertLevel = ALERT_OK
+[ ] config.h: đổi MQTT_SERVER = "broker.hivemq.com"
+[ ] comm_task.cpp: rewrite — bỏ Serial, thêm mqttCallback,
+    subscribe wearable/alert, publish wearable/data
+[ ] alert_manager.cpp: 3 mức dựa trên alertLevel (switch/case)
+[ ] pulse_sensor.cpp: bỏ hardcode test alertTriggered
+[ ] Flash + test: Serial Monitor thấy "Subscribed to wearable/alert"
 ```
 
-### Ưu tiên 4 — Flutter App (CE-3/CE-4) — lớn, cần sprint
+### Ưu tiên 2 — Flutter DeviceService MQTT (CE-3/CE-4) — ~3 giờ
 ```
-[ ] Setup project + 3 screens + MQTT service + push notification
+[ ] device_service.dart: rewrite implement MQTT 2 chiều
+[ ] sensor_provider.dart: deviceService public
+[ ] prediction_provider.dart: thêm deviceService param, gửi A/M/O
+[ ] live_monitor_screen.dart: thêm auto-predict Timer
+[ ] Cập nhật tất cả predictFromPacket calls
+[ ] config.dart: đổi defaultBaseUrl, predictIntervalMs = 2000
+[ ] Test: app nhận data từ ESP32 → predict → LED/Buzzer phản ứng
 ```
 
-### Ưu tiên 5 — Dashboard (CE-4) — nhỏ
+### Ưu tiên 3 — Backend logger integration (CS-1) — ~30 phút
 ```
-[ ] Tạo Adafruit feeds + module1_display.py
+[ ] api_server.py: thêm log_reading() call trong /predict-from-sensor
+[ ] Kiểm tra SQLite ghi đúng sau mỗi predict
 ```
 
-### Ưu tiên 6 — Báo cáo (CE-3/CE-4 + tất cả) — lớn
+### Ưu tiên 4 — Firewall + network setup (tất cả) — ~15 phút
 ```
-[ ] Viết 7 chương theo phân công, target ≥ 30 trang
+[ ] Mở Windows Firewall port 8000
+[ ] Xác nhận IP laptop: ipconfig
+[ ] Test từ điện thoại: browser → http://<IP>:8000/health
+[ ] Settings app: cập nhật Base URL đúng IP
+```
+
+### Ưu tiên 5 — Adafruit IO Dashboard (CE-4) — tuỳ thời gian
+```
+[ ] Tạo account + feeds
+[ ] module1_display.py
+```
+
+### Ưu tiên 6 — Báo cáo (cả team) — song song
+```
+[ ] Viết 7 chương, target ≥ 30 trang
+[ ] Cập nhật sơ đồ kiến trúc theo Option B
 ```
 
 ---
 
-## 15. Files quan trọng hiện có trong repo
+## 15. Checklist demo end-to-end
+
+```
+Chuẩn bị (T-15 phút):
+  □ ESP32 flash firmware mới, cắm nguồn
+  □ Serial Monitor: kiểm tra "Subscribed to wearable/alert"
+  □ Laptop: uvicorn src.inference.api_server:app --host 0.0.0.0 --port 8000
+  □ Laptop: GET /health → {"status": "ok"}
+  □ Điện thoại: Settings → Base URL = http://<IP laptop>:8000
+  □ Điện thoại: "Check Backend" → "Backend healthy"
+  □ Điện thoại: Mode = real_device
+
+Khi demo:
+  □ Live Monitor → Connect Device (MQTT kết nối HiveMQ)
+  □ Bật Auto Predict (interval 2s)
+  □ Quan sát: HR chart cập nhật từ ESP32 thật
+  □ Quan sát: PredictionCard chuyển màu OK/MEDIUM/HIGH
+  □ Quan sát: ESP32 LED nhấp nháy / Buzzer kêu đúng mức
+  □ History tab: readings được lưu
+
+Fallback nếu MQTT/WiFi không ổn:
+  □ Mode = mock → chọn profile (rest/walk/brisk/run)
+  □ Demo model predict bình thường, không có LED/Buzzer thật
+  □ Hoặc: python src/inference/realtime_loop.py (Serial mode)
+```
+
+---
+
+## 16. Files quan trọng — trạng thái hiện tại
 
 ```
 fl_wearable/
 ├── hardware/src/
 │   ├── main.cpp              ✅
-│   ├── pulse_sensor.cpp      ✅
+│   ├── pulse_sensor.cpp      ⚠️ cần bỏ hardcode test
 │   ├── motion_sensor.cpp     ✅
-│   ├── comm_task.cpp         ⚠️ cần thêm 'M'
-│   ├── alert_manager.cpp     ⚠️ cần thêm MEDIUM mode
-│   ├── config.h              ✅
+│   ├── comm_task.cpp         ⚠️ cần rewrite cho Option B
+│   ├── alert_manager.cpp     ⚠️ cần 3-level switch/case
+│   ├── config.h              ⚠️ cần đổi MQTT_SERVER
 │   └── globals.h/cpp         ⚠️ cần AlertLevel enum
 │
-├── data/processed/
-│   ├── client_1..5.csv       ✅
-│   ├── test_set.csv          ✅
-│   └── activity_*.csv        ✅
-│
 ├── src/
-│   ├── data/utils.py         ✅
-│   ├── data/pamap2_loader.py ✅
-│   ├── data/preprocess.py    ✅
-│   ├── data/split_clients.py ✅
-│   ├── data/dataset.py       ✅
-│   ├── data/scaler.py        ✅
+│   ├── data/                 ✅ tất cả
 │   ├── models/mlp.py         ✅
-│   ├── training/train_centralized.py ✅
-│   ├── training/train_local.py       ✅
-│   ├── training/compare_results.py   ✅
-│   ├── training/plot_results.py      ✅
-│   ├── fl/common.py          ✅
-│   ├── fl/client.py          ✅
-│   └── fl/server.py          ✅
+│   ├── training/             ✅ tất cả
+│   ├── fl/                   ✅ tất cả
+│   └── inference/
+│       ├── api_server.py     ✅ (cần thêm log_reading call)
+│       ├── predict.py        ✅
+│       ├── feature_builder.py ✅
+│       ├── logger.py         ✅
+│       ├── realtime_loop.py  ✅ (fallback, không phải primary)
+│       └── utils.py          ✅
 │
 ├── models/
+│   ├── flower_global_best.pt ✅
+│   ├── flower_scaler.pkl     ✅
 │   ├── centralized_mlp.pt    ✅
-│   ├── scaler.pkl            ✅
-│   ├── local_client_1..5.pt  ✅
-│   ├── fl_global_best.pt     ✅
-│   └── fl_scaler.pkl         ✅
+│   └── local_client_1..5.pt  ✅
+│
+├── lib/ (Flutter)
+│   ├── core/                 ✅ (config.dart cần đổi URL)
+│   ├── models/               ✅ tất cả
+│   ├── providers/
+│   │   ├── app_state.dart         ✅
+│   │   ├── settings_provider.dart ✅
+│   │   ├── sensor_provider.dart   ⚠️ cần deviceService public
+│   │   └── prediction_provider.dart ⚠️ cần thêm deviceService param
+│   ├── screens/              ✅ (live_monitor cần auto-predict Timer)
+│   ├── services/
+│   │   ├── api_service.dart        ✅
+│   │   ├── device_service.dart     ⚠️ cần rewrite MQTT 2 chiều
+│   │   ├── mock_sensor_service.dart ✅
+│   │   ├── mqtt_service.dart       ✅ (base, device_service dùng pattern này)
+│   │   ├── history_service.dart    ✅
+│   │   ├── notification_service.dart ✅
+│   │   └── settings_service.dart   ✅
+│   └── widgets/              ✅ tất cả
+│
+├── database/
+│   └── schema.sql            ✅ (được tạo bởi logger.py khi init_db())
 │
 ├── experiments/
 │   ├── compare_summary.csv   ✅
 │   ├── fl_round_metrics.csv  ✅
 │   └── plots/*.png           ✅
 │
-├── inference/realtime_loop.py ⚠️ cần update 3-class
-│
-├── flutter_app/               ❌ chưa có
-├── database/schema.sql        ❌ chưa có
-├── gateway/module*.py         ❌ chưa có
-│
-├── README.md                  ✅
-└── requirements.txt           ✅
+├── README.md                 ✅
+└── requirements.txt          ✅
 ```
 
 ---
 
-*Checkpoint này phản ánh trạng thái dự án tính đến 09/05/2026. Phần CS pipeline (data → FL → evaluation) đã hoàn thiện. Phần còn lại tập trung vào tích hợp phần cứng, mobile app, và báo cáo.*
+*Checkpoint cập nhật 12/05/2026. Kiến trúc đã chốt Option B — Flutter làm trung gian. CS pipeline (data → FL → inference API) hoàn chỉnh 100%. Phần còn lại tập trung vào: (1) rewrite ESP32 comm_task cho MQTT 2 chiều, (2) rewrite Flutter DeviceService, (3) wire lại prediction flow gửi alert về hardware.*
