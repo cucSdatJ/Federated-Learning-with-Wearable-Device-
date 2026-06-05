@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from src.data.dataset import WearableDataset, FEATURE_COLS, TARGET_COL
 from src.data.scaler import fit_scaler, transform_df
 from src.models.mlp import MLPClassifier
+from src.fl.common import compute_local_class_weights
 
 
 SEED = 42
@@ -35,17 +36,15 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
 
 
-def load_train_test():
+def load_all_clients():
     data_dir = Path("data/processed")
-
     train_parts = []
-    for i in range(1, 6):
+    for i in range(1, 9):
         csv_path = data_dir / f"client_{i}.csv"
         train_parts.append(pd.read_csv(csv_path))
 
     train_df = pd.concat(train_parts, ignore_index=True)
-    test_df = pd.read_csv(data_dir / "test_set.csv")
-    return train_df, test_df
+    return train_df
 
 
 def make_loader(df: pd.DataFrame, batch_size: int, shuffle: bool):
@@ -118,17 +117,16 @@ def main():
     print(f"[INFO] Device: {DEVICE}")
 
     # 1. Load data
-    train_df, test_df = load_train_test()
+    train_df_full = load_all_clients()
 
-    print("[INFO] Full train shape:", train_df.shape)
-    print("[INFO] Test shape:", test_df.shape)
+    print("[INFO] Full train shape:", train_df_full.shape)
 
     # 2. Train / validation split
-    train_df, val_df = train_test_split(
-        train_df,
+    train_df, val_df= train_test_split(
+        train_df_full,
         test_size=0.2,
         random_state=SEED,
-        stratify=train_df[TARGET_COL],
+        stratify=train_df_full[TARGET_COL],
     )
 
     print("[INFO] Train split:", train_df.shape)
@@ -140,14 +138,10 @@ def main():
     print("[INFO] Val label distribution:")
     print(val_df[TARGET_COL].value_counts(normalize=True).sort_index())
 
-    print("[INFO] Test label distribution:")
-    print(test_df[TARGET_COL].value_counts(normalize=True).sort_index())
-
     # 3. Fit scaler on train only
     scaler = fit_scaler(train_df)
     train_df = transform_df(train_df, scaler)
     val_df = transform_df(val_df, scaler)
-    test_df = transform_df(test_df, scaler)
 
     joblib.dump(scaler, out_model_dir / "scaler.pkl")
     print("[INFO] Saved scaler -> models/scaler.pkl")
@@ -155,19 +149,12 @@ def main():
     # 4. DataLoaders
     train_loader = make_loader(train_df, BATCH_SIZE, shuffle=True)
     val_loader = make_loader(val_df, BATCH_SIZE, shuffle=False)
-    test_loader = make_loader(test_df, BATCH_SIZE, shuffle=False)
 
     # 5. Model
     model = MLPClassifier(input_dim=len(FEATURE_COLS), num_classes=3).to(DEVICE)
 
     # 6. Class weights
-    classes = np.array(sorted(train_df[TARGET_COL].unique()))
-    class_weights = compute_class_weight(
-        class_weight="balanced",
-        classes=classes,
-        y=train_df[TARGET_COL].values
-    )
-    class_weights = torch.tensor(class_weights, dtype=torch.float32).to(DEVICE)
+    class_weights = compute_local_class_weights(train_df)
 
     print("[INFO] Class weights:", class_weights.cpu().numpy())
 
@@ -207,7 +194,7 @@ def main():
     # 8. Load best model and evaluate on test
     model.load_state_dict(torch.load(out_model_dir / "centralized_mlp.pt", map_location=DEVICE))
 
-    test_metrics, y_true, y_pred = evaluate(model, test_loader, DEVICE)
+    test_metrics, y_true, y_pred = evaluate(model, val_loader, DEVICE)
 
     print("\n[TEST RESULTS]")
     print("Accuracy      :", round(test_metrics["accuracy"], 4))

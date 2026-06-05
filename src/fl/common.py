@@ -27,7 +27,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 def fit_global_scaler():
     data_dir = Path("data/processed")
     dfs = []
-    for cid in [1, 2, 3, 4, 5]:
+    for cid in range(1, 9):
         dfs.append(pd.read_csv(data_dir / f"client_{cid}.csv"))
     train_all = pd.concat(dfs, ignore_index=True)
 

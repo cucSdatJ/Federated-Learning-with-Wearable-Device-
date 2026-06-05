@@ -1,0 +1,2 @@
+$env:PYTHONPATH="."
+python -m pytest tests/test_backend.py -v

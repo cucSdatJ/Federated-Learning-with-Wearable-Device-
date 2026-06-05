@@ -81,7 +81,7 @@ class WearableFlowerClient(fl.client.NumPyClient):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cid", type=int, required=True, help="Client ID: 1..5")
+    parser.add_argument("--cid", type=int, required=True, help="Client ID: 1..8")
     parser.add_argument("--server", type=str, default="127.0.0.1:8080")
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=512)
