@@ -13,6 +13,11 @@ import pandas as pd
 from src.inference.logger import init_db, log_reading, log_alert
 from src.models.mlp import MLPClassifier
 from src.inference.utils import FEATURE_COLS, LABEL_MAP
+import requests
+import json
+from datetime import datetime
+
+API_SERVER_URL = "http://127.0.0.1:8000" # Change this if your API server is elsewhere
 
 # ==========================================
 # CONFIG
@@ -101,9 +106,12 @@ def predict(model, scaler, features: np.ndarray):
 # ==========================================
 # SERIAL LOOP
 # ==========================================
-def run_serial(port: str, baud: int = 115200):
+def run_serial(port: str, baud: int = 115200, api_mode: bool = False):
 
-    model, scaler = load_model(MODEL_PATH, SCALER_PATH)
+    model, scaler = None, None
+    if not api_mode:
+        model, scaler = load_model(MODEL_PATH, SCALER_PATH)
+
     conn = init_db()
     # Rolling HR window — khởi tạo với giá trị resting mặc định
     hr_window = collections.deque(maxlen=HR_WINDOW_SIZE)
@@ -118,57 +126,132 @@ def run_serial(port: str, baud: int = 115200):
     try:
         while True:
             raw = ser.readline().decode("utf-8", errors="ignore").strip()
+            bpm = 0.0 # Initialize bpm and hr for printing later
+            hr = 0.0
+            activity_code = 0
+            pred_class = 0
+            pred_label = "OK"
+            probs = [0.0, 0.0, 0.0]
+            cmd = 'O'
 
-            # Bỏ qua dòng không đúng format
-            if "," not in raw:
-                continue
-            parts = raw.split(",")
-            if len(parts) != 2:
-                continue
+            if api_mode:
+                # API Mode: Expect richer data format
+                # Expected format: HR,Activity,AccX,AccY,AccZ,HR1,HR2,HR3,HR4,HR5,... (min 6 parts)
+                parts = raw.split(",")
+                if len(parts) < 6:
+                    # print(f"[!] Malformed data (not enough parts for API mode): {raw}") # Suppress frequent warnings
+                    continue
+                try:
+                    hr = float(parts[0])
+                    activity_code = int(parts[1])
+                    acc_x = float(parts[2])
+                    acc_y = float(parts[3])
+                    acc_z = float(parts[4])
+                    hr_window_from_esp32 = [float(x) for x in parts[5:]]
 
-            try:
-                bpm           = float(parts[0])
-                activity_code = int(parts[1])
-            except ValueError:
-                continue
+                    if not (30 <= hr <= 220): continue
+                    if not (0 <= activity_code <= 4): continue # Assuming activity codes are 0,1,2,3,4
 
-            # Sanity check
-            if not (30 <= bpm <= 220):
-                continue
-            if activity_code not in ACTIVITY_MAP:
-                continue
+                    payload = {
+                        "heart_rate": hr,
+                        "hr_window": hr_window_from_esp32,
+                        "acc_x": acc_x,
+                        "acc_y": acc_y,
+                        "acc_z": acc_z,
+                        "device_activity_code": activity_code,
+                        #"hour_of_day": float(datetime.now().hour),
+                        "timestamp_seconds": float(datetime.now().timestamp()),
+                    }
 
-            # Cập nhật rolling window
-            hr_window.append(bpm)
+                    try:
+                        response = requests.post(f"{API_SERVER_URL}/predict-from-sensor", json=payload)
+                        response.raise_for_status()
+                        risk_info = response.json()
 
-            # Build features + predict
-            features   = build_features(bpm, activity_code, hr_window)
-            pred_class, probs = predict(model, scaler, features)
-            pred_label = LABEL_MAP[pred_class]
+                        pred_class = risk_info["pred_class"]
+                        pred_label = risk_info["pred_label"]
+                        # Ensure order for probs: OK, MEDIUM, HIGH
+                        probs = [risk_info["probabilities"].get("OK", 0.0), 
+                                 risk_info["probabilities"].get("MEDIUM", 0.0), 
+                                 risk_info["probabilities"].get("HIGH", 0.0)]
+                        
+                        action_from_api = risk_info["action"]
+                        if action_from_api == "ALERT":
+                            ser.write(b'A') # HIGH
+                            cmd = 'A'
+                        elif action_from_api == "WARNING":
+                            ser.write(b'M') # MEDIUM
+                            cmd = 'M'
+                        else: # "OK"
+                            ser.write(b'O') # OK
+                            cmd = 'O'
+                            
+                    except requests.exceptions.RequestException as e:
+                        print(f"[!] ERROR communicating with API server: {e}")
+                        if hasattr(e, 'response') and e.response is not None:
+                            print(f"[!] CHI TIẾT LỖI 422: {e.response.text}")
+                        ser.write(b'E') # Send 'E' for error (if ESP32 understands it)
+                        cmd = 'E'
+                        time.sleep(1) # Avoid spamming
+                        continue # Skip to next reading
 
-            # Gửi lệnh về ESP32
-            if pred_class == 2:
-                ser.write(b'A')   # HIGH
-                cmd = 'A'
-            elif pred_class == 1:
-                ser.write(b'M')   # MEDIUM
-                cmd = 'M'
+                except ValueError as e:
+                    # print(f"[!] ERROR parsing API mode sensor data: {raw} - {e}") # Suppress frequent warnings
+                    continue # Skip malformed serial lines
+
             else:
-                ser.write(b'O')   # OK
-                cmd = 'O'
+                # Original Hardware Mode: Expect simpler data format (HR,Activity)
+                # Bỏ qua dòng không đúng format
+                if "," not in raw:
+                    continue
+                parts = raw.split(",")
+                if len(parts) != 2:
+                    continue
 
-            # Log ra terminal
+                try:
+                    bpm           = float(parts[0])
+                    activity_code = int(parts[1])
+                    hr = bpm # For consistent printing
+                except ValueError:
+                    continue
+
+                # Sanity check
+                if not (30 <= bpm <= 220):
+                    continue
+                if activity_code not in ACTIVITY_MAP:
+                    continue
+
+                # Cập nhật rolling window
+                hr_window.append(bpm)
+
+                # Build features + predict (local model)
+                features   = build_features(bpm, activity_code, hr_window)
+                pred_class, probs = predict(model, scaler, features)
+                pred_label = LABEL_MAP[pred_class]
+
+                # Gửi lệnh về ESP32 (Original A/M/O logic)
+                if pred_class == 2:
+                    ser.write(b'A')   # HIGH
+                    cmd = 'A'
+                elif pred_class == 1:
+                    ser.write(b'M')   # MEDIUM
+                    cmd = 'M'
+                else:
+                    ser.write(b'O')   # OK
+                    cmd = 'O'
+
+            # Log ra terminal (common for both modes)
             ts = time.strftime("%H:%M:%S")
             print(
-                f"[{ts}] BPM={bpm:6.1f} | "
+                f"[{ts}] BPM={hr:6.1f} | " 
                 f"Activity={ACTIVITY_MAP.get(activity_code, '?'):5s} | "
                 f"→ {pred_label:6s} "
                 f"(OK={probs[0]:.2f} MED={probs[1]:.2f} HIGH={probs[2]:.2f}) "
                 f"| CMD={cmd}"
             )
-            log_reading(conn, bpm, activity_code, probs.tolist(), pred_label)
+            log_reading(conn, hr, activity_code, probs if isinstance(probs, list) else probs.tolist(), pred_label) # Use hr for logging
             if pred_class in [1, 2]:
-                log_alert(conn, bpm, severity=pred_label)
+                log_alert(conn, hr, severity=pred_label) # Use hr for logging
 
     except KeyboardInterrupt:
         print("\n[*] Stopped by user.")
@@ -228,10 +311,17 @@ if __name__ == "__main__":
     parser.add_argument("--port",  type=str, default=None,
                         help="Serial port (e.g. COM5). Bỏ trống để chạy demo mode.")
     parser.add_argument("--baud",  type=int, default=115200)
+    parser.add_argument("--api",   action="store_true",
+                        help="Enable API mode to fetch predictions from a FastAPI server.")
     args = parser.parse_args()
 
     if args.port is None:
         print("[*] No port specified → running demo mode")
         run_demo()
     else:
-        run_serial(args.port, args.baud)
+        mode_str = "API Mode" if args.api else "Hardware Mode"
+        print("=" * 52)
+        print(f"  Wearable FL — Real-time Inference ({mode_str})")
+        print("  Press Ctrl+C to stop")
+        print("=" * 52)
+        run_serial(args.port, args.baud, args.api)
